@@ -2,12 +2,21 @@ const ACCESS_COOKIE = 'ec_access';
 const REFRESH_COOKIE = 'ec_refresh';
 const CSRF_COOKIE = 'ec_csrf';
 
-const secure = process.env.COOKIE_SECURE === 'true';
+// When the frontend and API sit on different domains (Cloudflare Pages calling a
+// Render-hosted API), the browser treats every request as cross-site and will drop
+// SameSite=Lax cookies. SameSite=None is required there — and browsers only accept
+// None over HTTPS, so it implies Secure.
+const sameSite = (process.env.COOKIE_SAMESITE || 'lax').toLowerCase();
+const secure = process.env.COOKIE_SECURE === 'true' || sameSite === 'none';
+
+if (sameSite === 'none' && process.env.COOKIE_SECURE !== 'true') {
+  console.warn('COOKIE_SAMESITE=none requires secure cookies — forcing Secure on.');
+}
 
 const baseOptions = {
   httpOnly: true,
   secure,
-  sameSite: 'lax',
+  sameSite,
 };
 
 function setAuthCookies(res, { accessToken, refreshToken }) {
@@ -35,4 +44,6 @@ module.exports = {
   CSRF_COOKIE,
   setAuthCookies,
   clearAuthCookies,
+  cookieSameSite: sameSite,
+  cookieSecure: secure,
 };

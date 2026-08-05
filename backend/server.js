@@ -25,10 +25,22 @@ for (const key of requiredEnvVars) {
 const app = express();
 app.set('trust proxy', 1);
 
+// CLIENT_URL accepts a comma-separated list so localhost and the deployed
+// frontend can both be allowed without redeploying between environments.
+const allowedOrigins = (process.env.CLIENT_URL || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(helmet());
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin(origin, callback) {
+      // Same-origin/curl requests send no Origin header — allow those through.
+      // Unknown origins get no CORS headers (so browsers block them) rather than
+      // a thrown error, which would surface as a confusing 500.
+      callback(null, !origin || allowedOrigins.includes(origin));
+    },
     credentials: true,
   })
 );

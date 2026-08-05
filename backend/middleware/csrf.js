@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { CSRF_COOKIE } = require('../utils/cookies');
+const { CSRF_COOKIE, cookieSameSite, cookieSecure } = require('../utils/cookies');
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -11,9 +11,9 @@ function ensureCsrfCookie(req, res, next) {
   if (!req.cookies[CSRF_COOKIE]) {
     const token = crypto.randomBytes(32).toString('hex');
     res.cookie(CSRF_COOKIE, token, {
-      httpOnly: false,
-      secure: process.env.COOKIE_SECURE === 'true',
-      sameSite: 'lax',
+      httpOnly: false, // the frontend must read this to echo it back as a header
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: '/',
     });
     req.cookies[CSRF_COOKIE] = token;
