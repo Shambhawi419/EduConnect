@@ -1,52 +1,69 @@
 # EduConnect
 
-Full-stack web app for college students: a doubt-resolution chatbot, a PDF-to-quiz
-generator, and account security via MFA + role-based access control (RBAC).
+A study workspace for college students, built as a single **Next.js** app.
 
-Stack: React (Vite) + Node.js/Express + MongoDB, OpenAI for the chatbot and quiz
-generation.
+Three features, all behind a secure login:
 
-## Structure
+- **AI Tutor** — chat that resolves academic doubts with step-by-step explanations
+- **PDF → Quiz** — upload lecture notes, get a multiple-choice quiz with explanations
+- **Schedule** — a personal timetable you fill in yourself, with computed free-time gaps
 
-- `backend/` — Express API (auth, MFA, RBAC, chatbot, quiz generation)
-- `frontend/` — React app (Vite)
+## Stack
 
-## Setup
+| Layer | Technology |
+| --- | --- |
+| Framework | Next.js 15 (App Router) — UI **and** API in one app |
+| UI | React 19, plain CSS |
+| Database | MongoDB via Mongoose |
+| AI | OpenAI (`gpt-4o-mini`) |
+| Auth | httpOnly cookies + rotating refresh tokens + TOTP MFA |
 
-### 1. MongoDB
+There is no separate backend server. API endpoints are Next Route Handlers under
+`app/api/`, so the frontend and API share one origin and one deployment.
 
-You need a MongoDB instance. Either run one locally (`mongod`) or point
-`backend/.env`'s `MONGODB_URI` at a hosted cluster (e.g. MongoDB Atlas).
-
-### 2. Backend
+## Project layout
 
 ```
-cd backend
+app/
+  (app)/          authenticated pages (route group — not part of the URL)
+    page.jsx        dashboard
+    chat/ quiz/ schedule/ account/ admin/
+  login/ register/  unauthenticated pages
+  api/              route handlers (the former Express routes)
+  layout.jsx        root layout: fonts + AuthProvider
+  globals.css
+components/       AppShell (sidebar + auth guard), AuthContext, Icons, BlobArt
+lib/              db, jwt, cookies, auth guard, csrf, rateLimit, api client, openai
+models/           Mongoose schemas: User, RefreshToken, StudyEvent
+```
+
+## Security
+
+- **Sessions** — 15-minute access JWT + 7-day rotating refresh token, both httpOnly
+  cookies. Only the SHA-256 hash of the refresh token is stored, so a database leak
+  alone can't be replayed as a live session.
+- **Theft detection** — reusing an already-rotated refresh token revokes every
+  session for that user and bumps `tokenVersion`, which invalidates outstanding
+  access tokens too.
+- **Brute force** — database-backed account lockout (5 attempts → 15-minute lock).
+  This is the authoritative defence; in-memory rate limiting is a best-effort speed
+  bump on top (see `lib/rateLimit.js`).
+- **CSRF** — double-submit token with a constant-time compare, on top of
+  `SameSite=Lax`.
+- **MFA** — optional TOTP via authenticator app.
+- **RBAC** — `student` / `admin`, enforced server-side in each route handler.
+- **Headers** — set in `next.config.js` (the former `helmet()`).
+
+## Running locally
+
+```bash
 npm install
-npm run dev
+cp .env.example .env.local     # then fill in the values
+npm run dev                    # http://localhost:3000
 ```
 
-Runs on http://localhost:5000. Edit `backend/.env` to change the port, JWT
-secret, Mongo URI, or OpenAI key.
+Requires a MongoDB instance — local (`mongodb://127.0.0.1:27017/educonnect`) or Atlas.
 
-### 3. Frontend
+## Deploying
 
-```
-cd frontend
-npm install
-npm run dev
-```
-
-Runs on http://localhost:5173 and talks to the API at the URL in
-`frontend/.env` (`VITE_API_BASE`).
-
-## Features
-
-- **Auth**: register/login with bcrypt-hashed passwords and JWTs.
-- **MFA**: TOTP-based two-factor auth (Google Authenticator/Authy compatible),
-  set up from the Account page — scans a QR code, confirms with a 6-digit code.
-- **RBAC**: `student` and `admin` roles; admin-only routes are enforced both
-  server-side (`middleware/rbac.js`) and hidden client-side in the nav.
-- **Chatbot**: doubt-resolution assistant backed by OpenAI's chat API.
-- **PDF to quiz**: upload a PDF, the server extracts text and asks OpenAI to
-  generate a multiple-choice quiz, which is then taken interactively in the UI.
+See [DEPLOYMENT.md](DEPLOYMENT.md) — Vercel + MongoDB Atlas.

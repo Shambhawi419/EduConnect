@@ -23,3 +23,8 @@ Thumbs.db
 
 # Local uploads
 uploads/
+
+# Next.js
+.next/
+next-env.d.ts
+.vercel
