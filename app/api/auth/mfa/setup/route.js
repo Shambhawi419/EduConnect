@@ -14,6 +14,15 @@ export async function POST(request) {
   const { user, error } = await requireAuth();
   if (error) return error;
 
+  // Replacing the secret of an account that already has MFA on would lock the
+  // real owner out of their authenticator app. They must disable MFA first.
+  if (user.mfaEnabled) {
+    return NextResponse.json(
+      { message: 'MFA is already enabled. Disable it before setting it up again.' },
+      { status: 400 }
+    );
+  }
+
   try {
     const secret = speakeasy.generateSecret({ name: `EduConnect (${user.email})` });
 

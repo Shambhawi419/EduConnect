@@ -30,9 +30,9 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
-    const { name, email, password, role } = body;
+    const { name, email, password } = body;
 
-    const limited = authRateLimit(request, typeof email === 'string' ? email : '');
+    const limited = await authRateLimit(request, typeof email === 'string' ? email : '');
     if (limited) return limited;
 
     if (!name || typeof name !== 'string' || !email || typeof email !== 'string' || !password) {
@@ -63,17 +63,26 @@ export async function POST(request) {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+    // Self-registration always creates a student. A request-supplied role is
+    // ignored; admins are promoted out-of-band with `npm run make-admin`.
     const user = await User.create({
       name: validator.escape(name.trim()),
       email: normalizedEmail,
       passwordHash,
-      role: role === 'admin' ? 'admin' : 'student',
+      role: 'student',
     });
 
     const res = NextResponse.json({ user: publicUser(user) }, { status: 201 });
     await issueSession(res, user, request);
     return res;
   } catch (err) {
+    // Two simultaneous sign-ups with the same email: the unique index rejects the second.
+    if (err?.code === 11000) {
+      return NextResponse.json(
+        { message: 'An account with this email already exists' },
+        { status: 409 }
+      );
+    }
     console.error('register failed:', err);
     return NextResponse.json({ message: 'Registration failed' }, { status: 500 });
   }

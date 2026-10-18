@@ -45,14 +45,17 @@ models/           Mongoose schemas: User, RefreshToken, StudyEvent
 - **Theft detection** — reusing an already-rotated refresh token revokes every
   session for that user and bumps `tokenVersion`, which invalidates outstanding
   access tokens too.
-- **Brute force** — database-backed account lockout (5 attempts → 15-minute lock).
-  This is the authoritative defence; in-memory rate limiting is a best-effort speed
-  bump on top (see `lib/rateLimit.js`).
+- **Brute force** — database-backed account lockout (5 wrong passwords → 15-minute
+  lock), plus a separate lockout for wrong MFA codes. Request rate limits are also
+  stored in MongoDB (`lib/rateLimit.js`), so every serverless instance shares them;
+  the OpenAI routes are limited per user.
 - **CSRF** — double-submit token with a constant-time compare, on top of
   `SameSite=Lax`.
 - **MFA** — optional TOTP via authenticator app.
 - **RBAC** — `student` / `admin`, enforced server-side in each route handler.
-- **Headers** — set in `next.config.js` (the former `helmet()`).
+  Registration always creates a `student`; promote an admin with
+  `npm run make-admin -- you@example.com`.
+- **Headers** — set in `next.config.mjs` (the former `helmet()`).
 
 ## Running locally
 

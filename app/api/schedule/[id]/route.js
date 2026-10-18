@@ -27,8 +27,16 @@ export async function PATCH(request, { params }) {
     const { error: invalid, data } = parseEventBody(await request.json());
     if (invalid) return NextResponse.json({ message: invalid }, { status: 400 });
 
+    // Mongoose drops `undefined` fields from an update, so an emptied Points box
+    // would silently keep its old value. Unset it explicitly in that case.
+    const { points, ...rest } = data;
+    const update =
+      points === undefined
+        ? { $set: rest, $unset: { points: 1 } }
+        : { $set: { ...rest, points } };
+
     await connectDB();
-    const event = await StudyEvent.findOneAndUpdate({ _id: id, user: user._id }, data, {
+    const event = await StudyEvent.findOneAndUpdate({ _id: id, user: user._id }, update, {
       new: true,
       runValidators: true,
     });

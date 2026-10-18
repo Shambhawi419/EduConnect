@@ -15,6 +15,11 @@ export const dynamic = 'force-dynamic';
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 
+// A real bcrypt hash of a throwaway string. When the email isn't registered we
+// still run one compare against it, so "no such user" takes as long as "wrong
+// password" and response time can't be used to discover which emails exist.
+const DUMMY_HASH = '$2a$12$Rbi5UKkE6esPU66/VkzKueHC51Jtk/XQRTwTRe4X3xZ8iAMl.5FfW';
+
 export async function POST(request) {
   const csrfError = await requireCsrf(request);
   if (csrfError) return csrfError;
@@ -22,7 +27,7 @@ export async function POST(request) {
   try {
     const { email, password } = await request.json();
 
-    const limited = authRateLimit(request, typeof email === 'string' ? email : '');
+    const limited = await authRateLimit(request, typeof email === 'string' ? email : '');
     if (limited) return limited;
 
     if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
@@ -36,6 +41,7 @@ export async function POST(request) {
       '+mfaSecret +failedLoginAttempts +lockUntil +tokenVersion'
     );
     if (!user) {
+      await bcrypt.compare(password, DUMMY_HASH);
       return NextResponse.json({ message: 'Invalid email or password' }, { status: 401 });
     }
 

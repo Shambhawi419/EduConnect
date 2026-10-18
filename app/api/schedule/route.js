@@ -8,27 +8,33 @@ import { publicEvent, parseEventBody } from '@/lib/schedule';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// GET /api/schedule?date=YYYY-MM-DD — one day's events for the signed-in user.
+const MAX_RANGE_MS = 32 * 24 * 60 * 60 * 1000;
+
+// GET /api/schedule?from=<ISO>&to=<ISO> — the signed-in user's events in [from, to).
+// The browser sends its own day boundaries as exact instants; computing "midnight"
+// here would use the server's timezone (UTC on Vercel) and shift events across days.
 export async function GET(request) {
   const { user, error } = await requireAuth();
   if (error) return error;
 
   try {
-    const date = request.nextUrl.searchParams.get('date');
+    const params = request.nextUrl.searchParams;
     const filter = { user: user._id };
 
-    if (date) {
-      const dayStart = new Date(`${date}T00:00:00`);
-      if (Number.isNaN(dayStart.getTime())) {
-        return NextResponse.json({ message: 'Invalid date' }, { status: 400 });
+    if (params.get('from') || params.get('to')) {
+      const from = new Date(params.get('from'));
+      const to = new Date(params.get('to'));
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from) {
+        return NextResponse.json({ message: 'Invalid date range' }, { status: 400 });
       }
-      const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
-      filter.startsAt = { $gte: dayStart, $lt: dayEnd };
+      if (to - from > MAX_RANGE_MS) {
+        return NextResponse.json({ message: 'Date range is too large' }, { status: 400 });
+      }
+      filter.startsAt = { $gte: from, $lt: to };
     }
 
     await connectDB();
-    const events = await StudyEvent.find(filter).sort({ startsAt: 1 });
+    const events = await StudyEvent.find(filter).sort({ startsAt: 1 }).limit(500);
     return NextResponse.json({ events: events.map(publicEvent) });
   } catch (err) {
     console.error('schedule list failed:', err);

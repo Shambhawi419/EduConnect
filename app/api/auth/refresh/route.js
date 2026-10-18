@@ -12,6 +12,25 @@ import { REFRESH_TTL_MS } from '@/lib/session';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// If a token was rotated this recently, a second request carrying it is almost
+// certainly the same browser (two tabs, or parallel requests) racing itself, not
+// a thief. We refuse it without revoking anything.
+const ROTATION_GRACE_MS = 10 * 1000;
+
+function sessionExpired() {
+  const res = NextResponse.json(
+    { message: 'Session expired, please log in again' },
+    { status: 401 }
+  );
+  clearAuthCookies(res);
+  return res;
+}
+
+// 409 tells the client "someone else just refreshed — retry with the new cookies".
+function refreshRace() {
+  return NextResponse.json({ message: 'Session was just refreshed, retry' }, { status: 409 });
+}
+
 export async function POST(request) {
   const csrfError = await requireCsrf(request);
   if (csrfError) return csrfError;
@@ -25,22 +44,21 @@ export async function POST(request) {
 
     await connectDB();
 
-    const tokenHash = hashRefreshToken(token);
-    const stored = await RefreshToken.findOne({ tokenHash });
+    const stored = await RefreshToken.findOne({ tokenHash: hashRefreshToken(token) });
+    if (!stored || stored.expiresAt < new Date()) {
+      return sessionExpired();
+    }
 
-    // Reuse of a revoked/rotated refresh token is a strong signal of theft: kill
-    // every session for that user rather than trusting either token.
-    if (!stored || stored.revoked || stored.expiresAt < new Date()) {
-      if (stored && stored.revoked) {
-        await RefreshToken.updateMany({ user: stored.user, revoked: false }, { revoked: true });
-        await User.findByIdAndUpdate(stored.user, { $inc: { tokenVersion: 1 } });
-      }
-      const res = NextResponse.json(
-        { message: 'Session expired, please log in again' },
-        { status: 401 }
-      );
-      clearAuthCookies(res);
-      return res;
+    if (stored.revoked) {
+      const justRotated =
+        stored.replacedByHash && Date.now() - stored.updatedAt.getTime() < ROTATION_GRACE_MS;
+      if (justRotated) return refreshRace();
+
+      // Reuse of an old rotated token is a strong signal of theft: kill every
+      // session for that user rather than trusting either token.
+      await RefreshToken.updateMany({ user: stored.user, revoked: false }, { revoked: true });
+      await User.findByIdAndUpdate(stored.user, { $inc: { tokenVersion: 1 } });
+      return sessionExpired();
     }
 
     const user = await User.findById(stored.user).select('+tokenVersion');
@@ -50,14 +68,19 @@ export async function POST(request) {
       return res;
     }
 
+    // Claim the token atomically. If two requests arrive together, exactly one
+    // flips revoked false -> true; the other gets null and backs off.
     const newRefreshToken = generateRefreshToken();
-    stored.revoked = true;
-    stored.replacedByHash = hashRefreshToken(newRefreshToken);
-    await stored.save();
+    const newHash = hashRefreshToken(newRefreshToken);
+    const claimed = await RefreshToken.findOneAndUpdate(
+      { _id: stored._id, revoked: false },
+      { revoked: true, replacedByHash: newHash }
+    );
+    if (!claimed) return refreshRace();
 
     await RefreshToken.create({
       user: user._id,
-      tokenHash: stored.replacedByHash,
+      tokenHash: newHash,
       expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
       userAgent: request.headers.get('user-agent') || undefined,
       ip: request.headers.get('x-forwarded-for')?.split(',')[0].trim() || undefined,

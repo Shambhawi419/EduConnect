@@ -84,6 +84,15 @@ Vercel — nothing to configure.
 - [ ] Ask the tutor something → reply comes back
 - [ ] Log out → redirected to `/login`
 
+### Creating an admin
+
+Registration always creates a student account. Register normally, then promote that
+account from your own machine (it reads `MONGODB_URI` from `.env.local`):
+
+```bash
+npm run make-admin -- you@example.com
+```
+
 ---
 
 ## Serverless notes
@@ -94,12 +103,11 @@ Two things behave differently on Vercel than on a long-running Node server:
 `lib/db.js` caches the Mongoose connection on `globalThis` so instances reuse it
 instead of opening a new connection per request and exhausting Atlas's limit.
 
-**Rate limiting** — `lib/rateLimit.js` counts requests in memory, which is *not*
-shared across instances, so a distributed attacker can exceed the limits. It is a
-speed bump, not the real defence: the authoritative brute-force protection is the
-database-backed account lockout in `app/api/auth/login/route.js`, which every
-instance sees. To make rate limiting authoritative too, swap the `Map` for Redis
-(e.g. Upstash) — the function signatures are designed to stay the same.
+**Rate limiting** — `lib/rateLimit.js` keeps its counters in MongoDB (the
+`ratelimits` collection, cleaned up automatically by a TTL index), so every instance
+sees the same counts. Login and MFA also have their own database-backed lockouts.
+If the limiter's database call fails, the request is let through rather than
+blocking every user. An OpenAI spending limit (step 3) is still your real cost cap.
 
 **Function timeouts** — the OpenAI-backed routes declare `maxDuration = 60`. Vercel's
 Hobby plan caps functions at 60s; a very large PDF may need the Pro plan.

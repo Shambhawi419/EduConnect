@@ -28,3 +28,6 @@ uploads/
 .next/
 next-env.d.ts
 .vercel
+
+.vercel
+.env*

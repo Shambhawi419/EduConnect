@@ -8,7 +8,7 @@ import { useAuth } from '@/components/AuthContext';
 import BlobArt from '@/components/BlobArt';
 
 export default function RegisterPage() {
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'student' });
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const { login } = useAuth();
@@ -67,25 +67,6 @@ export default function RegisterPage() {
               At least 8 characters, with an uppercase letter, a lowercase letter, a number, and a
               symbol.
             </p>
-          </div>
-          <div className="field">
-            <label>Role</label>
-            <div className="segmented">
-              <button
-                type="button"
-                className={form.role === 'student' ? 'active' : ''}
-                onClick={() => setForm((f) => ({ ...f, role: 'student' }))}
-              >
-                Student
-              </button>
-              <button
-                type="button"
-                className={form.role === 'admin' ? 'active' : ''}
-                onClick={() => setForm((f) => ({ ...f, role: 'admin' }))}
-              >
-                Admin
-              </button>
-            </div>
           </div>
           <button className="pill-btn block" disabled={busy}>
             {busy ? 'Creating account…' : 'Sign up'}

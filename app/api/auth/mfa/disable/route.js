@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import speakeasy from 'speakeasy';
+import { checkMfaCode, lockedMessage } from '@/lib/mfa';
 import { connectDB } from '@/lib/db';
 import User from '@/models/User';
 import { requireAuth, publicUser } from '@/lib/auth';
@@ -19,18 +19,18 @@ export async function POST(request) {
     const { code } = await request.json();
 
     await connectDB();
-    const user = await User.findById(authUser._id).select('+mfaSecret');
+    const user = await User.findById(authUser._id).select(
+      '+mfaSecret +mfaFailedAttempts +mfaLockUntil'
+    );
     if (!user?.mfaEnabled) {
       return NextResponse.json({ message: 'MFA is not enabled' }, { status: 400 });
     }
 
-    const verified = speakeasy.totp.verify({
-      secret: user.mfaSecret,
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
-    if (!verified) {
+    const result = await checkMfaCode(user, code);
+    if (result.locked) {
+      return NextResponse.json({ message: lockedMessage(result.minutesLeft) }, { status: 423 });
+    }
+    if (!result.ok) {
       return NextResponse.json({ message: 'Invalid authentication code' }, { status: 401 });
     }
 

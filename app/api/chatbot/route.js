@@ -10,6 +10,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+const MAX_MESSAGE_CHARS = 4000;
+
 const SYSTEM_PROMPT =
   'You are EduConnect, a patient and encouraging tutor for college students. ' +
   'Resolve academic doubts clearly, use step-by-step explanations, and ask a ' +
@@ -22,13 +24,19 @@ export async function POST(request) {
   const { user, error } = await requireAuth();
   if (error) return error;
 
-  const limited = apiRateLimit(request, 'chatbot');
+  const limited = await apiRateLimit(request, 'chatbot', { userId: user._id.toString() });
   if (limited) return limited;
 
   try {
     const { message, history } = await request.json();
-    if (!message || typeof message !== 'string') {
+    if (!message || typeof message !== 'string' || !message.trim()) {
       return NextResponse.json({ message: 'message is required' }, { status: 400 });
+    }
+    if (message.length > MAX_MESSAGE_CHARS) {
+      return NextResponse.json(
+        { message: `Message must be ${MAX_MESSAGE_CHARS} characters or fewer` },
+        { status: 400 }
+      );
     }
 
     const priorMessages = Array.isArray(history)
@@ -37,6 +45,9 @@ export async function POST(request) {
             (m) => m && typeof m.content === 'string' && ['user', 'assistant'].includes(m.role)
           )
           .slice(-10)
+          // Cap each past message too, so the history can't be used to inflate the
+          // prompt (and the bill) beyond what a normal conversation would cost.
+          .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }))
       : [];
 
     const completion = await openai.chat.completions.create({
@@ -57,9 +68,7 @@ export async function POST(request) {
     return NextResponse.json({ reply });
   } catch (err) {
     console.error('chatbot failed:', err);
-    return NextResponse.json(
-      { message: 'Chatbot request failed', error: err.message },
-      { status: 502 }
-    );
+    // err.message can contain provider internals; the details stay in the server log.
+    return NextResponse.json({ message: 'Chatbot request failed' }, { status: 502 });
   }
 }

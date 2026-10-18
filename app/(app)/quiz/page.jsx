@@ -51,6 +51,7 @@ export default function QuizPage() {
       // The model can return correctIndex as a string ("2"); coerce it so the
       // strict comparisons below don't mark every answer wrong.
       setQuiz({
+        truncated: Boolean(data.truncated),
         questions: (data.quiz?.questions ?? []).map((q) => ({
           ...q,
           options: Array.isArray(q.options) ? q.options : [],
@@ -156,6 +157,12 @@ export default function QuizPage() {
         ) : (
           <div className="quiz-grid">
             <div className="quiz-main">
+            {quiz?.truncated && (
+              <p className="muted-note" style={{ marginBottom: 12 }}>
+                This PDF is long, so the questions are drawn from sections spread across the
+                document rather than from every page.
+              </p>
+            )}
             {questions.map((q, qi) => (
               <div className="quiz-question" key={qi}>
                 <b>

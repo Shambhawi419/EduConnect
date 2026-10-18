@@ -8,16 +8,12 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const store = await cookies();
-  let token = store.get(CSRF_COOKIE)?.value;
-
-  const res = NextResponse.json({ csrfToken: null });
-
-  if (!token) {
-    token = generateCsrfToken();
-    setCsrfCookie(res, token);
-  }
+  const existing = store.get(CSRF_COOKIE)?.value;
+  const token = existing || generateCsrfToken();
 
   // Returned in the body as well as the cookie so the client can hold it in
   // memory rather than reading document.cookie.
-  return NextResponse.json({ csrfToken: token }, { headers: res.headers });
+  const res = NextResponse.json({ csrfToken: token }, { headers: { 'Cache-Control': 'no-store' } });
+  if (!existing) setCsrfCookie(res, token);
+  return res;
 }

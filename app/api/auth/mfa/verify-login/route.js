@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import speakeasy from 'speakeasy';
 import { connectDB } from '@/lib/db';
 import User from '@/models/User';
 import { publicUser } from '@/lib/auth';
 import { requireCsrf } from '@/lib/csrf';
 import { authRateLimit } from '@/lib/rateLimit';
+import { checkMfaCode, lockedMessage } from '@/lib/mfa';
 import { verifyAccessToken } from '@/lib/jwt';
 import { issueSession } from '@/lib/session';
 
@@ -15,7 +15,7 @@ export async function POST(request) {
   const csrfError = await requireCsrf(request);
   if (csrfError) return csrfError;
 
-  const limited = authRateLimit(request, 'mfa');
+  const limited = await authRateLimit(request, 'mfa');
   if (limited) return limited;
 
   try {
@@ -38,7 +38,9 @@ export async function POST(request) {
     }
 
     await connectDB();
-    const user = await User.findById(payload.sub).select('+mfaSecret +tokenVersion');
+    const user = await User.findById(payload.sub).select(
+      '+mfaSecret +tokenVersion +mfaFailedAttempts +mfaLockUntil'
+    );
     if (!user?.mfaEnabled) {
       return NextResponse.json(
         { message: 'MFA is not enabled for this account' },
@@ -46,13 +48,13 @@ export async function POST(request) {
       );
     }
 
-    const verified = speakeasy.totp.verify({
-      secret: user.mfaSecret,
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
-    if (!verified) {
+    // Wrong codes are counted in MongoDB and lock the account's MFA after 5 misses,
+    // so the 6-digit code can't be brute-forced across serverless instances.
+    const result = await checkMfaCode(user, code);
+    if (result.locked) {
+      return NextResponse.json({ message: lockedMessage(result.minutesLeft) }, { status: 423 });
+    }
+    if (!result.ok) {
       return NextResponse.json({ message: 'Invalid authentication code' }, { status: 401 });
     }
 

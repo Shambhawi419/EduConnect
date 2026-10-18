@@ -14,6 +14,10 @@ const userSchema = new mongoose.Schema(
     },
     failedLoginAttempts: { type: Number, default: 0, select: false },
     lockUntil: { type: Date, select: false },
+    // Wrong authenticator codes are counted separately from wrong passwords, so a
+    // correct password can't be used to reset the guess counter.
+    mfaFailedAttempts: { type: Number, default: 0, select: false },
+    mfaLockUntil: { type: Date, select: false },
     // Bumped on password change / "log out everywhere" so previously issued access
     // tokens (which embed the tokenVersion they were signed with) stop verifying.
     tokenVersion: { type: Number, default: 0, select: false },
