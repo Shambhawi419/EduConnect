@@ -110,4 +110,18 @@ If the limiter's database call fails, the request is let through rather than
 blocking every user. An OpenAI spending limit (step 3) is still your real cost cap.
 
 **Function timeouts** — the OpenAI-backed routes declare `maxDuration = 60`. Vercel's
-Hobby plan caps functions at 60s; a very large PDF may need the Pro plan.
+Hobby plan caps functions at 60s. Indexing a typical PDF (tens of pages) takes a few
+seconds; a very large one may need the Pro plan.
+
+**Upload size** — Vercel rejects request bodies over about 4.5 MB before the app sees them,
+so PDF uploads are limited to 4 MB.
+
+**Quiz storage** — each indexed PDF stores its text plus a 2 KB vector per ~1,800
+characters (a 100-page PDF is roughly 1–2 MB). Documents expire after 30 days via a MongoDB
+TTL index, and each user can keep 5, which keeps the free Atlas tier (512 MB) comfortable
+for a small group. Quizzes also call OpenAI's embeddings endpoint once per upload and once
+per topic search; both cost a fraction of a cent.
+
+**MongoDB free-tier pausing** — an Atlas M0 cluster that gets no connections for a long
+time is paused, and while paused every request fails with `querySrv ENOTFOUND`. Resume it
+from the Atlas dashboard.

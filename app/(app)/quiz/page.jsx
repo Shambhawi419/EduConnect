@@ -1,11 +1,11 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuth } from '@/components/AuthContext';
 import BlobArt from '@/components/BlobArt';
-import { IconBack, IconShare, IconDots, IconTarget, IconPlay } from '@/components/Icons';
+import { IconBack, IconShare, IconDots, IconTarget, IconPlay, IconDoc } from '@/components/Icons';
 
 const TABS = [
   { id: 'source', label: 'Source' },
@@ -13,10 +13,30 @@ const TABS = [
   { id: 'review', label: 'Review' },
 ];
 
+// Matches the server limit (Vercel rejects larger request bodies anyway).
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+// Where the quiz's questions came from, in one sentence.
+function describeRetrieval(r, filename) {
+  if (!r) return '';
+  const used = `${r.passagesUsed} of ${r.passagesTotal} sections of ${filename}`;
+  const base =
+    r.mode === 'topic'
+      ? `Questions focus on “${r.topic}”, drawn from the ${used} that match it best.`
+      : `Questions are spread across the whole document, drawn from ${used}.`;
+  return r.returned < r.requested
+    ? `${base} There was only enough material for ${r.returned} of the ${r.requested} questions you asked for.`
+    : base;
+}
+
 export default function QuizPage() {
   const { user } = useAuth();
   const [tab, setTab] = useState('source');
-  const [file, setFile] = useState(null);
+  const [docs, setDocs] = useState([]);
+  const [docsLoading, setDocsLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [topic, setTopic] = useState('');
   const [numQuestions, setNumQuestions] = useState(5);
   const [quiz, setQuiz] = useState(null);
   const [answers, setAnswers] = useState({});
@@ -25,6 +45,7 @@ export default function QuizPage() {
   const [error, setError] = useState('');
   const inputRef = useRef(null);
 
+  const selectedDoc = docs.find((d) => d.id === selectedId) || null;
   const questions = quiz?.questions ?? [];
   const answered = Object.keys(answers).length;
   const correct = questions.reduce(
@@ -33,10 +54,55 @@ export default function QuizPage() {
   );
   const progress = questions.length ? Math.round((answered / questions.length) * 100) : 0;
 
+  useEffect(() => {
+    api
+      .quizDocuments()
+      .then((data) => {
+        setDocs(data.documents);
+        if (data.documents.length > 0) setSelectedId(data.documents[0].id);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setDocsLoading(false));
+  }, []);
+
+  const upload = async (file) => {
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError('PDF must be smaller than 4MB');
+      return;
+    }
+    setError('');
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const data = await api.uploadQuizDocument(formData);
+      setDocs((d) => [data.document, ...d]);
+      setSelectedId(data.document.id);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+
+  const removeDoc = async (doc) => {
+    if (!window.confirm(`Delete “${doc.filename}”? Its indexed text will be removed.`)) return;
+    setError('');
+    try {
+      await api.deleteQuizDocument(doc.id);
+      setDocs((d) => d.filter((x) => x.id !== doc.id));
+      if (selectedId === doc.id) setSelectedId(null);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const generate = async (e) => {
     e.preventDefault();
-    if (!file) {
-      setError('Choose a PDF file first');
+    if (!selectedDoc) {
+      setError('Upload a PDF, or pick one of your documents, first');
       return;
     }
     setError('');
@@ -44,14 +110,15 @@ export default function QuizPage() {
     setQuiz(null);
     setAnswers({});
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('numQuestions', numQuestions);
-      const data = await api.generateQuiz(formData);
+      const data = await api.generateQuiz({
+        documentId: selectedDoc.id,
+        topic: topic.trim(),
+        numQuestions: Number(numQuestions),
+      });
       // The model can return correctIndex as a string ("2"); coerce it so the
       // strict comparisons below don't mark every answer wrong.
       setQuiz({
-        truncated: Boolean(data.truncated),
+        retrieval: describeRetrieval(data.retrieval, data.document.filename),
         questions: (data.quiz?.questions ?? []).map((q) => ({
           ...q,
           options: Array.isArray(q.options) ? q.options : [],
@@ -94,7 +161,9 @@ export default function QuizPage() {
       <p className="eyebrow" style={{ marginTop: 20 }}>
         Lecture
       </p>
-      <h1 className="display">{file ? file.name.replace(/\.pdf$/i, '') : 'PDF to Quiz'}</h1>
+      <h1 className="display">
+        {selectedDoc ? selectedDoc.filename.replace(/\.pdf$/i, '') : 'PDF to Quiz'}
+      </h1>
 
       <div className="tabs">
         {TABS.map((t, i) => (
@@ -112,55 +181,120 @@ export default function QuizPage() {
       {error && <div className="error-banner">{error}</div>}
 
       {tab === 'source' && (
-        <form onSubmit={generate}>
+        <div>
           <div
             className="dropzone"
-            onClick={() => inputRef.current?.click()}
+            onClick={() => !uploading && inputRef.current?.click()}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+              if (!uploading) upload(e.dataTransfer.files[0]);
             }}
           >
-            {file ? file.name : 'Click or drop a PDF here'}
+            {uploading ? 'Reading and indexing your PDF…' : 'Click or drop a PDF here'}
             <input
               ref={inputRef}
               type="file"
               accept="application/pdf"
               hidden
-              onChange={(e) => setFile(e.target.files[0])}
+              onChange={(e) => upload(e.target.files[0])}
             />
           </div>
+          <p className="muted-note" style={{ marginTop: 10, fontSize: 12.5 }}>
+            Up to 4MB and 5 documents. Uploaded PDFs are stored privately, only for you, and
+            deleted automatically after 30 days — or sooner if you delete them.
+          </p>
 
           <div style={{ height: 18 }} />
 
-          <div className="field">
-            <label>Number of questions</label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={numQuestions}
-              onChange={(e) => setNumQuestions(e.target.value)}
-            />
-          </div>
+          <p className="section-title">Your documents</p>
+          {docsLoading ? (
+            <p className="muted-note">Loading…</p>
+          ) : docs.length === 0 ? (
+            <p className="muted-note">No documents yet — upload a PDF above.</p>
+          ) : (
+            <ul className="lesson-list" style={{ marginBottom: 18 }}>
+              {docs.map((d) => {
+                const isSelected = d.id === selectedId;
+                return (
+                  <li
+                    key={d.id}
+                    className="review-item"
+                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                  >
+                    <button
+                      type="button"
+                      className="lesson"
+                      aria-pressed={isSelected}
+                      style={{
+                        flex: 1,
+                        width: 'auto',
+                        boxShadow: isSelected ? '0 0 0 2px var(--ink)' : 'none',
+                      }}
+                      onClick={() => setSelectedId(d.id)}
+                    >
+                      <span className="play">
+                        <IconDoc width={18} height={18} />
+                      </span>
+                      <div className="lesson-text">
+                        <b>{d.filename}</b>
+                        <span>
+                          {d.pages} {d.pages === 1 ? 'page' : 'pages'} · {d.chunks} sections
+                        </span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="circle-btn flat sm"
+                      title="Delete document"
+                      onClick={() => removeDoc(d)}
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
-          <button className="pill-btn block" disabled={busy}>
-            {busy ? 'Generating…' : 'Generate quiz'}
-          </button>
-        </form>
+          <form onSubmit={generate}>
+            <div className="field">
+              <label>Topic (optional)</label>
+              <input
+                value={topic}
+                maxLength={200}
+                placeholder="e.g. the Calvin cycle — leave empty to cover the whole document"
+                onChange={(e) => setTopic(e.target.value)}
+              />
+            </div>
+
+            <div className="field">
+              <label>Number of questions</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={numQuestions}
+                onChange={(e) => setNumQuestions(e.target.value)}
+              />
+            </div>
+
+            <button className="pill-btn block" disabled={busy || uploading || !selectedDoc}>
+              {busy ? 'Generating…' : 'Generate quiz'}
+            </button>
+          </form>
+        </div>
       )}
 
       {tab === 'quiz' &&
         (questions.length === 0 ? (
-          <p className="muted-note">Upload a PDF on the Source tab to generate your quiz.</p>
+          <p className="muted-note">Pick a document on the Source tab to generate your quiz.</p>
         ) : (
           <div className="quiz-grid">
             <div className="quiz-main">
-            {quiz?.truncated && (
+            {quiz?.retrieval && (
               <p className="muted-note" style={{ marginBottom: 12 }}>
-                This PDF is long, so the questions are drawn from sections spread across the
-                document rather than from every page.
+                {quiz.retrieval}
               </p>
             )}
             {questions.map((q, qi) => (
@@ -184,6 +318,7 @@ export default function QuizPage() {
                 {answers[qi] !== undefined && q.explanation && (
                   <p className="muted-note" style={{ marginTop: 10, fontSize: 13 }}>
                     {q.explanation}
+                    {q.source ? ` (page ${q.source.page})` : ''}
                   </p>
                 )}
               </div>
@@ -266,6 +401,12 @@ export default function QuizPage() {
                           <p className="explain">{q.explanation}</p>
                         ) : (
                           <p className="explain">No explanation was provided for this question.</p>
+                        )}
+
+                        {q.source && (
+                          <p className="explain">
+                            <b>From page {q.source.page}:</b> “{q.source.excerpt}”
+                          </p>
                         )}
                       </div>
                     )}
