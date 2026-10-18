@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-// Import the library entry point directly — the package index runs a debug
-// harness that reads a sample PDF from disk at import time, which breaks bundling.
-import pdf from 'pdf-parse/lib/pdf-parse.js';
+import { extractText, getDocumentProxy } from 'unpdf';
 import { connectDB } from '@/lib/db';
 import QuizDocument from '@/models/QuizDocument';
 import QuizChunk from '@/models/QuizChunk';
@@ -29,28 +27,6 @@ function publicDocument(doc) {
     createdAt: doc.createdAt,
     expiresAt: doc.expiresAt,
   };
-}
-
-// Same text extraction pdf-parse does by default, but it also records each page's
-// text separately so passages can be traced back to a page number.
-function pageCollector() {
-  const pages = [];
-  const pagerender = async (pageData) => {
-    const content = await pageData.getTextContent({
-      normalizeWhitespace: false,
-      disableCombineTextItems: false,
-    });
-    let lastY;
-    let text = '';
-    for (const item of content.items) {
-      if (lastY === item.transform[5] || !lastY) text += item.str;
-      else text += `\n${item.str}`;
-      lastY = item.transform[5];
-    }
-    pages[pageData.pageIndex ?? pageData.pageNumber - 1] = text;
-    return text;
-  };
-  return { pages, pagerender };
 }
 
 // GET /api/quiz/documents — the signed-in user's indexed PDFs, newest first.
@@ -111,15 +87,28 @@ export async function POST(request) {
       return NextResponse.json({ message: 'Only PDF files are supported' }, { status: 400 });
     }
 
-    const { pages, pagerender } = pageCollector();
-    let parsed;
+    // unpdf bundles a current PDF.js, which repairs damaged files (for example a broken
+    // cross-reference table) that older readers reject with "bad XRef entry". Text comes
+    // back one string per page, so passages can be traced to a page number.
+    let pageTexts;
+    let pageCount;
     try {
-      parsed = await pdf(buffer, { pagerender });
+      const pdfDoc = await getDocumentProxy(new Uint8Array(buffer));
+      const extracted = await extractText(pdfDoc, { mergePages: false });
+      pageTexts = extracted.text;
+      pageCount = extracted.totalPages;
     } catch (err) {
-      console.error('pdf parse failed:', err);
-      return NextResponse.json({ message: 'Could not read this PDF' }, { status: 422 });
+      console.error('pdf parse failed:', err?.name, err?.message);
+      const locked = err?.name === 'PasswordException';
+      return NextResponse.json(
+        {
+          message: locked
+            ? 'This PDF is password-protected. Remove the password and try again.'
+            : 'Could not read this PDF',
+        },
+        { status: 422 }
+      );
     }
-    const pageTexts = Array.from({ length: parsed.numpages }, (_, i) => pages[i] || '');
 
     const chunks = chunkPages(pageTexts);
     if (chunks.length === 0) {
@@ -149,7 +138,7 @@ export async function POST(request) {
     const doc = await QuizDocument.create({
       user: user._id,
       filename: (typeof file.name === 'string' && file.name ? file.name : 'document.pdf').slice(0, 200),
-      pages: parsed.numpages,
+      pages: pageCount,
       chunkCount: chunks.length,
     });
 

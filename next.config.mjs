@@ -22,9 +22,9 @@ const nextConfig = {
       },
     ];
   },
-  // pdf-parse and mongoose are CommonJS with dynamic requires — keep them external
-  // so the server bundler doesn't try to trace them.
-  serverExternalPackages: ['pdf-parse', 'mongoose'],
+  // mongoose is CommonJS with dynamic requires — keep it external so the server
+  // bundler doesn't try to trace it.
+  serverExternalPackages: ['mongoose'],
 };
 
 export default nextConfig;
